@@ -22,17 +22,17 @@ func TestEntryWithError(t *testing.T) {
 
 	err := fmt.Errorf("kaboom at layer %d", 4711)
 
-	assert.Equal(err, WithError(err).Data["error"])
+	assert.Equal(err, WithError(err).Data.ToFields()["error"])
 
 	logger := New()
 	logger.Out = &bytes.Buffer{}
 	entry := NewEntry(logger)
 
-	assert.Equal(err, entry.WithError(err).Data["error"])
+	assert.Equal(err, entry.WithError(err).Data.ToFields()["error"])
 
 	ErrorKey = "err"
 
-	assert.Equal(err, entry.WithError(err).Data["err"])
+	assert.Equal(err, entry.WithError(err).Data.ToFields()["err"])
 
 }
 
@@ -71,24 +71,24 @@ func TestEntryWithContextCopiesData(t *testing.T) {
 	assert.NotEqual(ctx1, ctx2)
 
 	// Ensure that data set in the parent Entry are preserved to both children
-	assert.Equal("parentValue", childEntry1.Data["parentKey"])
-	assert.Equal("parentValue", childEntry2.Data["parentKey"])
+	assert.Equal("parentValue", childEntry1.Data.ToFields()["parentKey"])
+	assert.Equal("parentValue", childEntry2.Data.ToFields()["parentKey"])
 
 	// Modify data stored in the child entry
-	childEntry1.Data["childKey"] = "childValue"
+	childEntry1.Data.ToFields()["childKey"] = "childValue"
 
 	// Verify that data is successfully stored in the child it was set on
-	val, exists := childEntry1.Data["childKey"]
+	val, exists := childEntry1.Data.ToFields()["childKey"]
 	assert.True(exists)
 	assert.Equal("childValue", val)
 
 	// Verify that the data change to child 1 has not affected its sibling
-	val, exists = childEntry2.Data["childKey"]
+	val, exists = childEntry2.Data.ToFields()["childKey"]
 	assert.False(exists)
 	assert.Empty(val)
 
 	// Verify that the data change to child 1 has not affected its parent
-	val, exists = parentEntry.Data["childKey"]
+	val, exists = parentEntry.Data.ToFields()["childKey"]
 	assert.False(exists)
 	assert.Empty(val)
 }
@@ -106,24 +106,24 @@ func TestEntryWithTimeCopiesData(t *testing.T) {
 	childEntry2 := parentEntry.WithTime(time.Now().AddDate(0, 0, 2))
 
 	// Ensure that data set in the parent Entry are preserved to both children
-	assert.Equal("parentValue", childEntry1.Data["parentKey"])
-	assert.Equal("parentValue", childEntry2.Data["parentKey"])
+	assert.Equal("parentValue", childEntry1.Data.ToFields()["parentKey"])
+	assert.Equal("parentValue", childEntry2.Data.ToFields()["parentKey"])
 
 	// Modify data stored in the child entry
-	childEntry1.Data["childKey"] = "childValue"
+	childEntry1.Data.ToFields()["childKey"] = "childValue"
 
 	// Verify that data is successfully stored in the child it was set on
-	val, exists := childEntry1.Data["childKey"]
+	val, exists := childEntry1.Data.ToFields()["childKey"]
 	assert.True(exists)
 	assert.Equal("childValue", val)
 
 	// Verify that the data change to child 1 has not affected its sibling
-	val, exists = childEntry2.Data["childKey"]
+	val, exists = childEntry2.Data.ToFields()["childKey"]
 	assert.False(exists)
 	assert.Empty(val)
 
 	// Verify that the data change to child 1 has not affected its parent
-	val, exists = parentEntry.Data["childKey"]
+	val, exists = parentEntry.Data.ToFields()["childKey"]
 	assert.False(exists)
 	assert.Empty(val)
 }
@@ -138,7 +138,7 @@ func TestEntryPanicln(t *testing.T) {
 		switch pVal := p.(type) {
 		case *Entry:
 			assert.Equal(t, "kaboom", pVal.Message)
-			assert.Equal(t, errBoom, pVal.Data["err"])
+			assert.Equal(t, errBoom, pVal.Data.ToFields()["err"])
 		default:
 			t.Fatalf("want type *Entry, got %T: %#v", pVal, pVal)
 		}
@@ -160,7 +160,7 @@ func TestEntryPanicf(t *testing.T) {
 		switch pVal := p.(type) {
 		case *Entry:
 			assert.Equal(t, "kaboom true", pVal.Message)
-			assert.Equal(t, errBoom, pVal.Data["err"])
+			assert.Equal(t, errBoom, pVal.Data.ToFields()["err"])
 		default:
 			t.Fatalf("want type *Entry, got %T: %#v", pVal, pVal)
 		}
@@ -182,7 +182,7 @@ func TestEntryPanic(t *testing.T) {
 		switch pVal := p.(type) {
 		case *Entry:
 			assert.Equal(t, "kaboom", pVal.Message)
-			assert.Equal(t, errBoom, pVal.Data["err"])
+			assert.Equal(t, errBoom, pVal.Data.ToFields()["err"])
 		default:
 			t.Fatalf("want type *Entry, got %T: %#v", pVal, pVal)
 		}

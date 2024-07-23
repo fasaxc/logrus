@@ -28,8 +28,8 @@ func Example_basic() {
 			entry := err.(*logrus.Entry)
 			log.WithFields(logrus.Fields{
 				"omg":         true,
-				"err_animal":  entry.Data["animal"],
-				"err_size":    entry.Data["size"],
+				"err_animal":  entry.Data.ToFields()["animal"],
+				"err_size":    entry.Data.ToFields()["size"],
 				"err_level":   entry.Level,
 				"err_message": entry.Message,
 				"number":      100,

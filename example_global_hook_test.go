@@ -18,7 +18,7 @@ func (h *GlobalHook) Levels() []logrus.Level {
 }
 
 func (h *GlobalHook) Fire(e *logrus.Entry) error {
-	e.Data["mystring"] = mystring
+	e.Data.ToFields()["mystring"] = mystring
 	return nil
 }
 

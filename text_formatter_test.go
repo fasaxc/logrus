@@ -338,7 +338,7 @@ func TestTextFormatterFieldMap(t *testing.T) {
 			"message":    "messagefield",
 			"somelevel":  "levelfield",
 			"timeywimey": "timeywimeyfield",
-		},
+		}.ToSlice(),
 	}
 
 	b, err := formatter.Format(entry)
@@ -592,7 +592,7 @@ func TestCustomSorting(t *testing.T) {
 			"test":      "testvalue",
 			"prefix":    "the application prefix",
 			"blablabla": "blablabla",
-		},
+		}.ToSlice(),
 	}
 	b, err := formatter.Format(entry)
 	require.NoError(t, err)

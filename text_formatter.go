@@ -6,8 +6,6 @@ import (
 	"os"
 	"runtime"
 	"sort"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -132,7 +130,8 @@ func (f *TextFormatter) isColored() bool {
 // Format renders a single log entry
 func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 	data := make(Fields)
-	for k, v := range entry.Data {
+	for _, f := range entry.Data {
+		k,v := f.Key, f.Value
 		data[k] = v
 	}
 	prefixFieldClashes(data, f.FieldMap, entry.HasCaller())
@@ -148,23 +147,15 @@ func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 		fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyTime))
 	}
 	fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyLevel))
-	if entry.Message != "" {
-		fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyMsg))
-	}
+	//if entry.Message != "" {
+	//	fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyMsg))
+	//}
 	if entry.err != "" {
 		fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyLogrusError))
 	}
 	if entry.HasCaller() {
-		if f.CallerPrettyfier != nil {
-			funcVal, fileVal = f.CallerPrettyfier(entry.Caller)
-		} else {
-			funcVal = entry.Caller.Function
-			fileVal = fmt.Sprintf("%s:%d", entry.Caller.File, entry.Caller.Line)
-		}
-
-		if funcVal != "" {
-			fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyFunc))
-		}
+		file, line := "", "" // getFileInfo()
+		fileVal = fmt.Sprintf("%s:%d", file, line)
 		if fileVal != "" {
 			fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyFile))
 		}
@@ -187,11 +178,11 @@ func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 	}
 
 	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
+	//if entry.Buffer != nil {
+	//	b = entry.Buffer
+	//} else {
 		b = &bytes.Buffer{}
-	}
+	//}
 
 	f.terminalInitOnce.Do(func() { f.init(entry) })
 
@@ -206,14 +197,14 @@ func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 		for _, key := range fixedKeys {
 			var value interface{}
 			switch {
-			case key == f.FieldMap.resolve(FieldKeyTime):
-				value = entry.Time.Format(timestampFormat)
-			case key == f.FieldMap.resolve(FieldKeyLevel):
-				value = entry.Level.String()
-			case key == f.FieldMap.resolve(FieldKeyMsg):
-				value = entry.Message
-			case key == f.FieldMap.resolve(FieldKeyLogrusError):
-				value = entry.err
+			//case key == f.FieldMap.resolve(FieldKeyTime):
+			//	value = entry.Time.Format(timestampFormat)
+			//case key == f.FieldMap.resolve(FieldKeyLevel):
+			//	value = entry.Level.String()
+			//case key == f.FieldMap.resolve(FieldKeyMsg):
+			//	value = entry.Message
+			//case key == f.FieldMap.resolve(FieldKeyLogrusError):
+			//	value = entry.err
 			case key == f.FieldMap.resolve(FieldKeyFunc) && entry.HasCaller():
 				value = funcVal
 			case key == f.FieldMap.resolve(FieldKeyFile) && entry.HasCaller():
@@ -230,69 +221,57 @@ func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 }
 
 func (f *TextFormatter) printColored(b *bytes.Buffer, entry *Entry, keys []string, data Fields, timestampFormat string) {
-	var levelColor int
-	switch entry.Level {
-	case DebugLevel, TraceLevel:
-		levelColor = gray
-	case WarnLevel:
-		levelColor = yellow
-	case ErrorLevel, FatalLevel, PanicLevel:
-		levelColor = red
-	case InfoLevel:
-		levelColor = blue
-	default:
-		levelColor = blue
-	}
-
-	levelText := strings.ToUpper(entry.Level.String())
-	if !f.DisableLevelTruncation && !f.PadLevelText {
-		levelText = levelText[0:4]
-	}
-	if f.PadLevelText {
-		// Generates the format string used in the next line, for example "%-6s" or "%-7s".
-		// Based on the max level text length.
-		formatString := "%-" + strconv.Itoa(f.levelTextMaxLength) + "s"
-		// Formats the level text by appending spaces up to the max length, for example:
-		// 	- "INFO   "
-		//	- "WARNING"
-		levelText = fmt.Sprintf(formatString, levelText)
-	}
-
-	// Remove a single newline if it already exists in the message to keep
-	// the behavior of logrus text_formatter the same as the stdlib log package
-	entry.Message = strings.TrimSuffix(entry.Message, "\n")
-
-	caller := ""
-	if entry.HasCaller() {
-		funcVal := fmt.Sprintf("%s()", entry.Caller.Function)
-		fileVal := fmt.Sprintf("%s:%d", entry.Caller.File, entry.Caller.Line)
-
-		if f.CallerPrettyfier != nil {
-			funcVal, fileVal = f.CallerPrettyfier(entry.Caller)
-		}
-
-		if fileVal == "" {
-			caller = funcVal
-		} else if funcVal == "" {
-			caller = fileVal
-		} else {
-			caller = fileVal + " " + funcVal
-		}
-	}
-
-	switch {
-	case f.DisableTimestamp:
-		fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m%s %-44s ", levelColor, levelText, caller, entry.Message)
-	case !f.FullTimestamp:
-		fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m[%04d]%s %-44s ", levelColor, levelText, int(entry.Time.Sub(baseTimestamp)/time.Second), caller, entry.Message)
-	default:
-		fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m[%s]%s %-44s ", levelColor, levelText, entry.Time.Format(timestampFormat), caller, entry.Message)
-	}
-	for _, k := range keys {
-		v := data[k]
-		fmt.Fprintf(b, " \x1b[%dm%s\x1b[0m=", levelColor, k)
-		f.appendValue(b, v)
-	}
+	//var levelColor int
+	//switch entry.Level {
+	//case DebugLevel, TraceLevel:
+	//	levelColor = gray
+	//case WarnLevel:
+	//	levelColor = yellow
+	//case ErrorLevel, FatalLevel, PanicLevel:
+	//	levelColor = red
+	//case InfoLevel:
+	//	levelColor = blue
+	//default:
+	//	levelColor = blue
+	//}
+	//
+	//levelText := strings.ToUpper(entry.Level.String())
+	//if !f.DisableLevelTruncation && !f.PadLevelText {
+	//	levelText = levelText[0:4]
+	//}
+	//if f.PadLevelText {
+	//	// Generates the format string used in the next line, for example "%-6s" or "%-7s".
+	//	// Based on the max level text length.
+	//	formatString := "%-" + strconv.Itoa(f.levelTextMaxLength) + "s"
+	//	// Formats the level text by appending spaces up to the max length, for example:
+	//	// 	- "INFO   "
+	//	//	- "WARNING"
+	//	levelText = fmt.Sprintf(formatString, levelText)
+	//}
+	//
+	//// Remove a single newline if it already exists in the message to keep
+	//// the behavior of logrus text_formatter the same as the stdlib log package
+	//entry.Message = strings.TrimSuffix(entry.Message, "\n")
+	//
+	//caller := ""
+	//if entry.HasCaller() {
+	//	fileVal := fmt.Sprintf("%s:%d", entry.File, entry.Line)
+	//	caller = fileVal
+	//}
+	//
+	//switch {
+	//case f.DisableTimestamp:
+	//	fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m%s %-44s ", levelColor, levelText, caller, entry.Message)
+	//case !f.FullTimestamp:
+	//	fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m[%04d]%s %-44s ", levelColor, levelText, int(entry.Time.Sub(baseTimestamp)/time.Second), caller, entry.Message)
+	//default:
+	//	fmt.Fprintf(b, "\x1b[%dm%s\x1b[0m[%s]%s %-44s ", levelColor, levelText, entry.Time.Format(timestampFormat), caller, entry.Message)
+	//}
+	//for _, k := range keys {
+	//	v := data[k]
+	//	fmt.Fprintf(b, " \x1b[%dm%s\x1b[0m=", levelColor, k)
+	//	f.appendValue(b, v)
+	//}
 }
 
 func (f *TextFormatter) needsQuoting(text string) bool {

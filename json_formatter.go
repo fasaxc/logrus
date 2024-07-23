@@ -62,7 +62,8 @@ type JSONFormatter struct {
 // Format renders a single log entry
 func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 	data := make(Fields, len(entry.Data)+4)
-	for k, v := range entry.Data {
+	for _, f := range entry.Data {
+		k,v := f.Key, f.Value
 		switch v := v.(type) {
 		case error:
 			// Otherwise errors are ignored by `encoding/json`
@@ -85,35 +86,28 @@ func (f *JSONFormatter) Format(entry *Entry) ([]byte, error) {
 	if timestampFormat == "" {
 		timestampFormat = defaultTimestampFormat
 	}
-
-	if entry.err != "" {
-		data[f.FieldMap.resolve(FieldKeyLogrusError)] = entry.err
-	}
-	if !f.DisableTimestamp {
-		data[f.FieldMap.resolve(FieldKeyTime)] = entry.Time.Format(timestampFormat)
-	}
-	data[f.FieldMap.resolve(FieldKeyMsg)] = entry.Message
-	data[f.FieldMap.resolve(FieldKeyLevel)] = entry.Level.String()
-	if entry.HasCaller() {
-		funcVal := entry.Caller.Function
-		fileVal := fmt.Sprintf("%s:%d", entry.Caller.File, entry.Caller.Line)
-		if f.CallerPrettyfier != nil {
-			funcVal, fileVal = f.CallerPrettyfier(entry.Caller)
-		}
-		if funcVal != "" {
-			data[f.FieldMap.resolve(FieldKeyFunc)] = funcVal
-		}
-		if fileVal != "" {
-			data[f.FieldMap.resolve(FieldKeyFile)] = fileVal
-		}
-	}
+	//
+	//if entry.err != "" {
+	//	data[f.FieldMap.resolve(FieldKeyLogrusError)] = entry.err
+	//}
+	//if !f.DisableTimestamp {
+	//	data[f.FieldMap.resolve(FieldKeyTime)] = entry.Time.Format(timestampFormat)
+	//}
+	//data[f.FieldMap.resolve(FieldKeyMsg)] = entry.Message
+	//data[f.FieldMap.resolve(FieldKeyLevel)] = entry.Level.String()
+	//if entry.HasCaller() {
+	//	fileVal := fmt.Sprintf("%s:%d", entry.File, entry.Line)
+	//	if fileVal != "" {
+	//		data[f.FieldMap.resolve(FieldKeyFile)] = fileVal
+	//	}
+	//}
 
 	var b *bytes.Buffer
-	if entry.Buffer != nil {
-		b = entry.Buffer
-	} else {
+	//if entry.Buffer != nil {
+	//	b = entry.Buffer
+	//} else {
 		b = &bytes.Buffer{}
-	}
+	//}
 
 	encoder := json.NewEncoder(b)
 	encoder.SetEscapeHTML(!f.DisableHTMLEscape)

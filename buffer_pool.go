@@ -18,7 +18,13 @@ type defaultPool struct {
 	pool *sync.Pool
 }
 
+const maxCap = 1024*16
+
 func (p *defaultPool) Put(buf *bytes.Buffer) {
+	if buf.Cap() > maxCap {
+		return
+	}
+	buf.Reset()
 	p.pool.Put(buf)
 }
 

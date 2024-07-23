@@ -9,6 +9,14 @@ import (
 // Fields type, used to pass to `WithFields`.
 type Fields map[string]interface{}
 
+func (f Fields) ToSlice() FieldsSlice {
+	s := make(FieldsSlice, 0, len(f))
+	for k, v := range f {
+		s = append(s, Field{Key: k, Value:v})
+	}
+	return s
+}
+
 // Level type
 type Level uint32
 

@@ -86,7 +86,7 @@ func doBenchmark(b *testing.B, formatter Formatter, fields Fields) {
 		Time:    time.Time{},
 		Level:   InfoLevel,
 		Message: "message",
-		Data:    fields,
+		Data:    fields.ToSlice(),
 		Logger:  logger,
 	}
 	var d []byte

@@ -15,7 +15,7 @@ func (h *DefaultFieldHook) Levels() []logrus.Level {
 }
 
 func (h *DefaultFieldHook) Fire(e *logrus.Entry) error {
-	e.Data["aDefaultField"] = h.GetValue()
+	e.Data.ToFields()["aDefaultField"] = h.GetValue()
 	return nil
 }
 

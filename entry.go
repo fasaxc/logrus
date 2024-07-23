@@ -5,8 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"reflect"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,45 +48,58 @@ type Entry struct {
 	Logger *Logger
 
 	// Contains all the fields set by the user.
-	Data Fields
-
-	// Time at which the log entry was created
-	Time time.Time
-
-	// Level the log entry was logged at: Trace, Debug, Info, Warn, Error, Fatal or Panic
-	// This field will be set on entry firing and the value will be equal to the one in Logger struct field.
-	Level Level
-
-	// Calling method, with package name
-	Caller *runtime.Frame
-
-	// Message passed to Trace, Debug, Info, Warn, Error, Fatal or Panic
-	Message string
-
-	// When formatter is called in entry.log(), a Buffer may be set to entry
-	Buffer *bytes.Buffer
+	Data FieldsSlice
 
 	// Contains the context set by the user. Useful for hook processing etc.
 	Context context.Context
 
 	// err may contain a field formatting error
-	err string
+	err    string
+}
+
+type FieldsSlice []Field
+
+func (s FieldsSlice) ToFields() Fields {
+	fields := make(Fields, len(s))
+	for _, f := range s {
+		fields[f.Key] = f.Value
+	}
+	return fields
+}
+
+func (s FieldsSlice) Get(key string) any {
+	for _, f := range s {
+		if f.Key == key {
+			return f.Value
+		}
+	}
+	return nil
+}
+
+type Field struct {
+	Key   string
+	Value any
 }
 
 func NewEntry(logger *Logger) *Entry {
-	return &Entry{
+	entry := &Entry{
 		Logger: logger,
-		// Default is three fields, plus one optional.  Give a little extra room.
-		Data: make(Fields, 6),
 	}
+	return entry
 }
 
 func (entry *Entry) Dup() *Entry {
-	data := make(Fields, len(entry.Data))
-	for k, v := range entry.Data {
-		data[k] = v
-	}
-	return &Entry{Logger: entry.Logger, Data: data, Time: entry.Time, Context: entry.Context, err: entry.err}
+	newEntry := *entry
+	entry.Data = make([]Field, len(entry.Data))
+	copy(entry.Data, entry.Data)
+	return &newEntry
+}
+
+func (entry *Entry) dupWithRoom(n int) *Entry {
+	newEntry := *entry
+	newEntry.Data = make([]Field, len(entry.Data), len(entry.Data)+n)
+	copy(newEntry.Data, entry.Data)
+	return &newEntry
 }
 
 // Returns the bytes representation of this entry from the formatter.
@@ -109,25 +125,26 @@ func (entry *Entry) WithError(err error) *Entry {
 
 // Add a context to the Entry.
 func (entry *Entry) WithContext(ctx context.Context) *Entry {
-	dataCopy := make(Fields, len(entry.Data))
-	for k, v := range entry.Data {
-		dataCopy[k] = v
-	}
-	return &Entry{Logger: entry.Logger, Data: dataCopy, Time: entry.Time, err: entry.err, Context: ctx}
+	newEntry := entry.Dup()
+	newEntry.Context = ctx
+	return newEntry
 }
 
 // Add a single field to the Entry.
 func (entry *Entry) WithField(key string, value interface{}) *Entry {
-	return entry.WithFields(Fields{key: value})
+	newEntry := entry.dupWithRoom(1)
+	newEntry.Data = append(newEntry.Data, Field{Key: key, Value: value})
+	return newEntry
 }
 
 // Add a map of fields to the Entry.
 func (entry *Entry) WithFields(fields Fields) *Entry {
-	data := make(Fields, len(entry.Data)+len(fields))
-	for k, v := range entry.Data {
-		data[k] = v
-	}
-	fieldErr := entry.err
+	newEntry := entry.dupWithRoom(len(fields))
+	newEntry.addFields(fields)
+	return newEntry
+}
+
+func (entry *Entry) addFields(fields Fields) {
 	for k, v := range fields {
 		isErrField := false
 		if t := reflect.TypeOf(v); t != nil {
@@ -138,25 +155,20 @@ func (entry *Entry) WithFields(fields Fields) *Entry {
 		}
 		if isErrField {
 			tmp := fmt.Sprintf("can not add field %q", k)
-			if fieldErr != "" {
-				fieldErr = entry.err + ", " + tmp
+			if entry.err != "" {
+				entry.err = entry.err + ", " + tmp
 			} else {
-				fieldErr = tmp
+				entry.err = tmp
 			}
 		} else {
-			data[k] = v
+			entry.Data = append(entry.Data, Field{Key: k, Value: v})
 		}
 	}
-	return &Entry{Logger: entry.Logger, Data: data, Time: entry.Time, err: fieldErr, Context: entry.Context}
 }
 
 // Overrides the time of the Entry.
 func (entry *Entry) WithTime(t time.Time) *Entry {
-	dataCopy := make(Fields, len(entry.Data))
-	for k, v := range entry.Data {
-		dataCopy[k] = v
-	}
-	return &Entry{Logger: entry.Logger, Data: dataCopy, Time: t, err: entry.err, Context: entry.Context}
+	return entry
 }
 
 // getPackageName reduces a fully qualified function name to the package name
@@ -176,7 +188,7 @@ func getPackageName(f string) string {
 }
 
 // getCaller retrieves the name of the first non-logrus calling function
-func getCaller() *runtime.Frame {
+func getCaller() (string, int) {
 	// cache this package's fully-qualified name
 	callerInitOnce.Do(func() {
 		pcs := make([]uintptr, maximumCallerDepth)
@@ -195,69 +207,64 @@ func getCaller() *runtime.Frame {
 	})
 
 	// Restrict the lookback frames to avoid runaway lookups
-	pcs := make([]uintptr, maximumCallerDepth)
-	depth := runtime.Callers(minimumCallerDepth, pcs)
+	var pcs [maximumCallerDepth]uintptr
+	depth := runtime.Callers(minimumCallerDepth, pcs[:])
 	frames := runtime.CallersFrames(pcs[:depth])
-
 	for f, again := frames.Next(); again; f, again = frames.Next() {
-		pkg := getPackageName(f.Function)
-
-		// If the caller isn't part of this package, we're done
-		if pkg != logrusPackage {
-			return &f //nolint:scopelint
+		if strings.HasPrefix(f.Function, logrusPackage) {
+			continue
 		}
+		// If the caller isn't part of this package, we're done
+		return path.Base(f.File), f.Line
 	}
 
 	// if we got here, we failed to find the caller's context
-	return nil
+	return "", 0
 }
 
-func (entry Entry) HasCaller() (has bool) {
-	return entry.Logger != nil &&
-		entry.Logger.ReportCaller &&
-		entry.Caller != nil
+func (entry *Entry) HasCaller() (has bool) {
+	return false
 }
 
-func (entry *Entry) log(level Level, msg string) {
-	var buffer *bytes.Buffer
+func (entry *Entry) log(level Level, msg string, fileName string, lineNo int) {
+	const desiredTimeFormat = "2006-01-02 15:04:05.000"
+	const desiredTimeLen = len(desiredTimeFormat)
 
-	newEntry := entry.Dup()
-
-	if newEntry.Time.IsZero() {
-		newEntry.Time = time.Now()
+	b := bufferPool.Get()
+	b.Grow(desiredTimeLen + 32 + len(fileName) + len(msg) + len(entry.Data)*32)
+	{
+		buf := b.AvailableBuffer()
+		// Want "2006-01-02 15:04:05.000" but the formatter has an optimised
+		// impl of RFC3339Nano, which we can easily tweak into our format.
+		const tPos = len("2006-01-02T")-1
+		buf = time.Now().AppendFormat(buf, time.RFC3339Nano)[:desiredTimeLen]
+		buf[tPos] = ' '
+		_, _ = b.Write(buf)
 	}
+	b.WriteString(levelStrings[level])
+	//if f.Component != "" {
+	//	b.WriteString(f.Component)
+	//	b.WriteByte('/')
+	//}
+	b.WriteString(fileName)
+	b.WriteByte(' ')
+	b.WriteString(strconv.Itoa(lineNo))
+	b.WriteString(": ")
+	b.WriteString(msg)
+	appendKVsAndNewLine(b, entry.Data)
 
-	newEntry.Level = level
-	newEntry.Message = msg
-
-	newEntry.Logger.mu.Lock()
-	reportCaller := newEntry.Logger.ReportCaller
-	bufPool := newEntry.getBufferPool()
-	newEntry.Logger.mu.Unlock()
-
-	if reportCaller {
-		newEntry.Caller = getCaller()
+	entry.Logger.mu.Lock()
+	defer entry.Logger.mu.Unlock()
+	if _, err := entry.Logger.Out.Write(b.Bytes()); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to write to log, %v\n", err)
 	}
-
-	newEntry.fireHooks()
-	buffer = bufPool.Get()
-	defer func() {
-		newEntry.Buffer = nil
-		buffer.Reset()
-		bufPool.Put(buffer)
-	}()
-	buffer.Reset()
-	newEntry.Buffer = buffer
-
-	newEntry.write()
-
-	newEntry.Buffer = nil
+	bufferPool.Put(b)
 
 	// To avoid Entry#log() returning a value that only would make sense for
 	// panic() to use in Entry#Panic(), we avoid the allocation by checking
 	// directly here.
 	if level <= PanicLevel {
-		panic(newEntry)
+		panic(entry)
 	}
 }
 
@@ -267,21 +274,21 @@ func (entry *Entry) getBufferPool() (pool BufferPool) {
 	}
 	return bufferPool
 }
-
-func (entry *Entry) fireHooks() {
-	var tmpHooks LevelHooks
-	entry.Logger.mu.Lock()
-	tmpHooks = make(LevelHooks, len(entry.Logger.Hooks))
-	for k, v := range entry.Logger.Hooks {
-		tmpHooks[k] = v
-	}
-	entry.Logger.mu.Unlock()
-
-	err := tmpHooks.Fire(entry.Level, entry)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to fire hook: %v\n", err)
-	}
-}
+//
+//func (entry *Entry) fireHooks() {
+//	var tmpHooks LevelHooks
+//	entry.Logger.mu.Lock()
+//	tmpHooks = make(LevelHooks, len(entry.Logger.Hooks))
+//	for k, v := range entry.Logger.Hooks {
+//		tmpHooks[k] = v
+//	}
+//	entry.Logger.mu.Unlock()
+//
+//	err := tmpHooks.Fire(entry.Level, entry)
+//	if err != nil {
+//		fmt.Fprintf(os.Stderr, "Failed to fire hook: %v\n", err)
+//	}
+//}
 
 func (entry *Entry) write() {
 	entry.Logger.mu.Lock()
@@ -296,12 +303,94 @@ func (entry *Entry) write() {
 	}
 }
 
+var levelStrings []string
+
+func init() {
+	levelStrings = make([]string, len(AllLevels))
+	for _, level := range AllLevels {
+		levelStrings[level] = fmt.Sprintf(" [%s][%d] ", strings.ToUpper(level.String()), os.Getpid())
+	}
+}
+
+	const FileNameUnknown = "<nil>"
+
+
+// appendKeysAndNewLine writes the KV pairs attached to the entry to the end of the buffer, then
+// finishes it with a newline.
+func appendKVsAndNewLine(b *bytes.Buffer, data FieldsSlice) {
+	// Sort the keys for consistent output.  Fixed-size array avoids an alloc
+	// if it's big enough.  make() spills if the length is not constant.
+	var keysArr [16]string
+	keys := keysArr[:0]
+	for _, k := range data {
+		keys = append(keys, k.Key)
+	}
+	sort.Strings(keys)
+
+	lastKey := ""
+	for _, key := range keys {
+		if key == lastKey {
+			continue
+		}
+		lastKey = key
+		if key ==  "__flush__" {
+			continue
+		}
+		var value any
+		for i := len(data) - 1; i >= 0; i-- {
+			if data[i].Key == key {
+				value = data[i].Value
+				break
+			}
+		}
+		b.WriteByte(' ')
+		b.WriteString(key)
+		b.WriteByte('=')
+		if s, ok := value.(string); ok {
+			b.WriteByte(' ')
+			b.WriteString(key)
+			b.WriteByte('=')
+			buf := b.AvailableBuffer()
+			buf = strconv.AppendQuote(buf, s)
+			b.Write(buf)
+			continue
+		} else if err, ok := value.(error); ok {
+			buf := b.AvailableBuffer()
+			buf = strconv.AppendQuote(buf, err.Error())
+			b.Write(buf)
+		} else if stringer, ok := value.(fmt.Stringer); ok {
+			// Trust the value's String() method.
+			buf := b.AvailableBuffer()
+			buf = strconv.AppendQuote(buf, stringer.String())
+			b.Write(buf)
+		} else {
+			// No string method, use %#v to get a more thorough dump.
+			_, _ = fmt.Fprintf(b, "%#v", value)
+			continue
+		}
+	}
+	b.WriteByte('\n')
+}
+
 // Log will log a message at the level given as parameter.
 // Warning: using Log at Panic or Fatal level will not respectively Panic nor Exit.
 // For this behaviour Entry.Panic or Entry.Fatal should be used instead.
 func (entry *Entry) Log(level Level, args ...interface{}) {
 	if entry.Logger.IsLevelEnabled(level) {
-		entry.log(level, fmt.Sprint(args...))
+		var msg string
+		if len(args) == 1 {
+			if s, ok := args[0].(string); ok {
+				// Mainline case, one argument that is a string: avoid an alloc.
+				msg = s
+			} else {
+				msg = fmt.Sprint(args[0])
+			}
+		} else {
+			msg = fmt.Sprint(args...)
+		}
+
+		fileName, lineNo := getCaller()
+		entry.log(level, msg, fileName, lineNo)
 	}
 }
 
