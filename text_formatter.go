@@ -150,9 +150,9 @@ func (f *TextFormatter) Format(entry *Entry) ([]byte, error) {
 	//if entry.Message != "" {
 	//	fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyMsg))
 	//}
-	if entry.err != "" {
-		fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyLogrusError))
-	}
+	//if entry.err != "" {
+	//	fixedKeys = append(fixedKeys, f.FieldMap.resolve(FieldKeyLogrusError))
+	//}
 	if entry.HasCaller() {
 		file, line := "", "" // getFileInfo()
 		fileVal = fmt.Sprintf("%s:%d", file, line)

@@ -176,7 +176,7 @@ func (logger *Logger) Panicf(format string, args ...interface{}) {
 // For this behaviour Logger.Panic or Logger.Fatal should be used instead.
 func (logger *Logger) Log(level Level, args ...interface{}) {
 	if logger.IsLevelEnabled(level) {
-		entry := NewEntry(logger)
+		entry := logger.templateEntry
 		entry.Log(level, args...)
 	}
 }
@@ -196,7 +196,12 @@ func (logger *Logger) Debug(args ...interface{}) {
 }
 
 func (logger *Logger) Info(args ...interface{}) {
-	logger.Log(InfoLevel, args...)
+	if !logger.IsLevelEnabled(InfoLevel) {
+		return
+	}
+	msg := flattenArgs(args...)
+	fileName, lineNo := getCaller()
+	logger.templateEntry.log(InfoLevel, msg, fileName, lineNo)
 }
 
 func (logger *Logger) Print(args ...interface{}) {

@@ -106,7 +106,12 @@ func Print(args ...interface{}) {
 
 // Info logs a message at level Info on the standard logger.
 func Info(args ...interface{}) {
-	std.Info(args...)
+	if !std.IsLevelEnabled(InfoLevel) {
+		return
+	}
+	msg := flattenArgs(args...)
+	fileName, lineNo := getCaller()
+	std.templateEntry.log(InfoLevel, msg, fileName, lineNo)
 }
 
 // Warn logs a message at level Warn on the standard logger.

@@ -4,21 +4,20 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"math/rand"
 	"os"
 	"path"
-	"reflect"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"tlog.app/go/loc"
 )
 
 var (
-
-	// qualified package name, cached at first use
-	logrusPackage string
 
 	// Positions in the call stack when tracing to report the calling method
 	minimumCallerDepth int
@@ -28,8 +27,9 @@ var (
 )
 
 const (
-	maximumCallerDepth int = 25
-	knownLogrusFrames  int = 4
+	logrusPackage          = "github.com/sirupsen/logrus/"
+	maximumCallerDepth int = 4
+	knownLogrusFrames  int = 2
 )
 
 func init() {
@@ -49,12 +49,6 @@ type Entry struct {
 
 	// Contains all the fields set by the user.
 	Data FieldsSlice
-
-	// Contains the context set by the user. Useful for hook processing etc.
-	Context context.Context
-
-	// err may contain a field formatting error
-	err    string
 }
 
 type FieldsSlice []Field
@@ -68,9 +62,9 @@ func (s FieldsSlice) ToFields() Fields {
 }
 
 func (s FieldsSlice) Get(key string) any {
-	for _, f := range s {
-		if f.Key == key {
-			return f.Value
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i].Key == key {
+			return s[i].Value
 		}
 	}
 	return nil
@@ -126,7 +120,7 @@ func (entry *Entry) WithError(err error) *Entry {
 // Add a context to the Entry.
 func (entry *Entry) WithContext(ctx context.Context) *Entry {
 	newEntry := entry.Dup()
-	newEntry.Context = ctx
+	//newEntry.Context = ctx
 	return newEntry
 }
 
@@ -146,23 +140,7 @@ func (entry *Entry) WithFields(fields Fields) *Entry {
 
 func (entry *Entry) addFields(fields Fields) {
 	for k, v := range fields {
-		isErrField := false
-		if t := reflect.TypeOf(v); t != nil {
-			switch {
-			case t.Kind() == reflect.Func, t.Kind() == reflect.Ptr && t.Elem().Kind() == reflect.Func:
-				isErrField = true
-			}
-		}
-		if isErrField {
-			tmp := fmt.Sprintf("can not add field %q", k)
-			if entry.err != "" {
-				entry.err = entry.err + ", " + tmp
-			} else {
-				entry.err = tmp
-			}
-		} else {
-			entry.Data = append(entry.Data, Field{Key: k, Value: v})
-		}
+		entry.Data = append(entry.Data, Field{Key: k, Value: v})
 	}
 }
 
@@ -189,33 +167,15 @@ func getPackageName(f string) string {
 
 // getCaller retrieves the name of the first non-logrus calling function
 func getCaller() (string, int) {
-	// cache this package's fully-qualified name
-	callerInitOnce.Do(func() {
-		pcs := make([]uintptr, maximumCallerDepth)
-		_ = runtime.Callers(0, pcs)
-
-		// dynamic get the package name and the minimum caller depth
-		for i := 0; i < maximumCallerDepth; i++ {
-			funcName := runtime.FuncForPC(pcs[i]).Name()
-			if strings.Contains(funcName, "getCaller") {
-				logrusPackage = getPackageName(funcName)
-				break
-			}
-		}
-
-		minimumCallerDepth = knownLogrusFrames
-	})
-
-	// Restrict the lookback frames to avoid runaway lookups
-	var pcs [maximumCallerDepth]uintptr
-	depth := runtime.Callers(minimumCallerDepth, pcs[:])
-	frames := runtime.CallersFrames(pcs[:depth])
-	for f, again := frames.Next(); again; f, again = frames.Next() {
-		if strings.HasPrefix(f.Function, logrusPackage) {
+	var pcsbuf [maximumCallerDepth]loc.PC
+	pcs := loc.CallersFill(knownLogrusFrames, pcsbuf[:])
+	for _, pc := range pcs {
+		_, file, line := pc.NameFileLine()
+		//fmt.Printf("file: %s, line: %d\n", file, line)
+		if strings.HasPrefix(file, logrusPackage) {
 			continue
 		}
-		// If the caller isn't part of this package, we're done
-		return path.Base(f.File), f.Line
+		return path.Base(file), line
 	}
 
 	// if we got here, we failed to find the caller's context
@@ -236,7 +196,7 @@ func (entry *Entry) log(level Level, msg string, fileName string, lineNo int) {
 		buf := b.AvailableBuffer()
 		// Want "2006-01-02 15:04:05.000" but the formatter has an optimised
 		// impl of RFC3339Nano, which we can easily tweak into our format.
-		const tPos = len("2006-01-02T")-1
+		const tPos = len("2006-01-02T") - 1
 		buf = time.Now().AppendFormat(buf, time.RFC3339Nano)[:desiredTimeLen]
 		buf[tPos] = ' '
 		_, _ = b.Write(buf)
@@ -248,7 +208,11 @@ func (entry *Entry) log(level Level, msg string, fileName string, lineNo int) {
 	//}
 	b.WriteString(fileName)
 	b.WriteByte(' ')
-	b.WriteString(strconv.Itoa(lineNo))
+	{
+		buf := b.AvailableBuffer()
+		strconv.AppendInt(buf, int64(lineNo), 10)
+		_, _ = b.Write(buf)
+	}
 	b.WriteString(": ")
 	b.WriteString(msg)
 	appendKVsAndNewLine(b, entry.Data)
@@ -274,6 +238,7 @@ func (entry *Entry) getBufferPool() (pool BufferPool) {
 	}
 	return bufferPool
 }
+
 //
 //func (entry *Entry) fireHooks() {
 //	var tmpHooks LevelHooks
@@ -295,11 +260,11 @@ func (entry *Entry) write() {
 	defer entry.Logger.mu.Unlock()
 	serialized, err := entry.Logger.Formatter.Format(entry)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to obtain reader, %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to obtain reader, %v\n", err)
 		return
 	}
 	if _, err := entry.Logger.Out.Write(serialized); err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to write to log, %v\n", err)
+		_, _ = fmt.Fprintf(os.Stderr, "Failed to write to log, %v\n", err)
 	}
 }
 
@@ -312,63 +277,66 @@ func init() {
 	}
 }
 
-	const FileNameUnknown = "<nil>"
-
+const FileNameUnknown = "<nil>"
 
 // appendKeysAndNewLine writes the KV pairs attached to the entry to the end of the buffer, then
 // finishes it with a newline.
 func appendKVsAndNewLine(b *bytes.Buffer, data FieldsSlice) {
-	// Sort the keys for consistent output.  Fixed-size array avoids an alloc
-	// if it's big enough.  make() spills if the length is not constant.
-	var keysArr [16]string
-	keys := keysArr[:0]
-	for _, k := range data {
-		keys = append(keys, k.Key)
+	if len(data) == 0 {
+		b.WriteByte('\n')
+		return
 	}
-	sort.Strings(keys)
+
+	// Sort the fields by key for consistent output.
+	var sortedFields []Field
+	if len(data) <= 16 {
+		// Avoid allocations for small number of fields.  The fixed-size array
+		// gets allocated on the stack, whereas make() does heap allocation
+		// if the length isn't known at compile time.
+		var dataArr [16]Field
+		sortedFields = dataArr[:len(data)]
+	} else {
+		sortedFields = make([]Field, len(data))
+	}
+	copy(sortedFields, data)
+	slices.SortStableFunc(sortedFields, func(a, b Field) int {
+		return strings.Compare(b.Key, a.Key) // reverse order
+	})
 
 	lastKey := ""
-	for _, key := range keys {
-		if key == lastKey {
+	for i := len(sortedFields) - 1; i >= 0; i-- {
+		key := sortedFields[i].Key
+		if key == lastKey || key == "__flush__" {
+			// Skip repeat keys.  We iterate in reverse order so these are overwritten values.
 			continue
 		}
 		lastKey = key
-		if key ==  "__flush__" {
-			continue
-		}
-		var value any
-		for i := len(data) - 1; i >= 0; i-- {
-			if data[i].Key == key {
-				value = data[i].Value
-				break
-			}
-		}
+
+		value := sortedFields[i].Value
 		b.WriteByte(' ')
 		b.WriteString(key)
 		b.WriteByte('=')
-		if s, ok := value.(string); ok {
-			b.WriteByte(' ')
-			b.WriteString(key)
-			b.WriteByte('=')
+
+		switch value := value.(type) {
+		case string:
 			buf := b.AvailableBuffer()
-			buf = strconv.AppendQuote(buf, s)
+			buf = strconv.AppendQuote(buf, value)
 			b.Write(buf)
-			continue
-		} else if err, ok := value.(error); ok {
+		case error:
 			buf := b.AvailableBuffer()
-			buf = strconv.AppendQuote(buf, err.Error())
+			buf = strconv.AppendQuote(buf, value.Error())
 			b.Write(buf)
-		} else if stringer, ok := value.(fmt.Stringer); ok {
+		case fmt.Stringer:
 			// Trust the value's String() method.
 			buf := b.AvailableBuffer()
-			buf = strconv.AppendQuote(buf, stringer.String())
+			buf = strconv.AppendQuote(buf, value.String())
 			b.Write(buf)
-		} else {
+		default:
 			// No string method, use %#v to get a more thorough dump.
 			_, _ = fmt.Fprintf(b, "%#v", value)
-			continue
 		}
 	}
+
 	b.WriteByte('\n')
 }
 
@@ -377,21 +345,25 @@ func appendKVsAndNewLine(b *bytes.Buffer, data FieldsSlice) {
 // For this behaviour Entry.Panic or Entry.Fatal should be used instead.
 func (entry *Entry) Log(level Level, args ...interface{}) {
 	if entry.Logger.IsLevelEnabled(level) {
-		var msg string
-		if len(args) == 1 {
-			if s, ok := args[0].(string); ok {
-				// Mainline case, one argument that is a string: avoid an alloc.
-				msg = s
-			} else {
-				msg = fmt.Sprint(args[0])
-			}
-		} else {
-			msg = fmt.Sprint(args...)
-		}
-
 		fileName, lineNo := getCaller()
+		msg := flattenArgs(args...)
 		entry.log(level, msg, fileName, lineNo)
 	}
+}
+
+func flattenArgs(args ...interface{}) string {
+	var msg string
+	if len(args) == 1 {
+		if s, ok := args[0].(string); ok {
+			// Mainline case, one argument that is a string: avoid an alloc.
+			msg = s
+		} else {
+			msg = fmt.Sprint(args[0])
+		}
+	} else {
+		msg = fmt.Sprint(args...)
+	}
+	return msg
 }
 
 func (entry *Entry) Trace(args ...interface{}) {
@@ -407,7 +379,60 @@ func (entry *Entry) Print(args ...interface{}) {
 }
 
 func (entry *Entry) Info(args ...interface{}) {
-	entry.Log(InfoLevel, args...)
+	if !entry.Logger.IsLevelEnabled(InfoLevel) {
+		return
+	}
+	fileName, lineNo := callerFileLine(1)
+	entry.log(InfoLevel, flattenArgs(args...), fileName, lineNo)
+}
+
+var (
+	cachedCallersMu sync.Mutex
+	cachedCallers = map[uintptr]callerInfo{}
+)
+type callerInfo struct {
+	file string
+	line int
+}
+
+var callerPCs [32]*struct{
+	lock sync.Mutex
+	pc []uintptr
+}
+
+func init() {
+	for i := range callerPCs {
+		callerPCs[i] = &struct{
+			lock sync.Mutex
+			pc []uintptr
+		}{
+			pc: make([]uintptr, 1),
+		}
+	}
+}
+
+func callerFileLine(skip int) (file string, line int) {
+	pcCache := callerPCs[rand.Intn(len(callerPCs))]
+	pcCache.lock.Lock()
+	defer pcCache.lock.Unlock()
+
+	pc := pcCache.pc
+	n := runtime.Callers(skip+2, pc)
+	if n < 1 {
+		return
+	}
+
+	cachedCallersMu.Lock()
+	defer cachedCallersMu.Unlock()
+	info, ok := cachedCallers[pc[0]];
+	if  ok {
+		return info.file, info.line
+	}
+
+	frame, _ := runtime.CallersFrames(pc).Next()
+	base := path.Base(frame.File)
+	cachedCallers[pc[0]] = callerInfo{base, frame.Line}
+	return base, frame.Line
 }
 
 func (entry *Entry) Warn(args ...interface{}) {
