@@ -379,7 +379,9 @@ func (entry *Entry) Print(args ...interface{}) {
 }
 
 func (entry *Entry) Info(args ...interface{}) {
-	if !entry.Logger.IsLevelEnabled(InfoLevel) {
+	const level = InfoLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
 		return
 	}
 
@@ -388,58 +390,66 @@ func (entry *Entry) Info(args ...interface{}) {
 	var fileName string
 	var lineNo int
 	{
-		var n int
-		var pc uintptr
-		{
-			// Use a pool of slices to avoid leaking the slice to the heap.
-			// runtime.Callers() is not marked as "noescape".
-			pcCache := pcSlicePool[rand.Intn(len(pcSlicePool))]
-			pcCache.lock.Lock()
-			pcSlice := pcCache.pc
-			n = runtime.Callers(2, pcSlice)
-			pc = pcSlice[0] // Copy the PC out before we release the lock.
-			pcSlice[0] = 0
-			pcCache.lock.Unlock()
-		}
-
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
 		if n == 1 {
-			// To avoid another allocation, we cache the calculated file and
-			// line number in a map.
-			cachedCallersMu.RLock()
-			info, ok := cachedCallers[pc]
-			cachedCallersMu.RUnlock()
-			if ok {
-				// Fast path: got a hit in the cache.
-				fileName, lineNo = info.file, info.line
-			} else {
-				// Slow path, look up the file/line number.  We reconstruct
-				// the pointer slice, just so we can return the above slice
-				// to the pool as quickly as possible (and avoid overlapping
-				// locks).
-				frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
-				fileName = path.Base(frame.File)
-				lineNo = frame.Line
-				cachedCallersMu.Lock()
-				if len(cachedCallers) > 2<<16 {
-					// If the cache is getting too big, start dropping entries.
-					dropped := 0
-					// Go's map iteration is random so deleting the first
-					// entries we see should do the trick.
-					for k := range cachedCallers {
-						delete(cachedCallers, k)
-						dropped++
-						if dropped > 128 {
-							break
-						}
-					}
-				}
-				cachedCallers[pc] = callerInfo{fileName, lineNo}
-				cachedCallersMu.Unlock()
-			}
+			fileName, lineNo = pcToFileLineNo(pc)
 		}
 	}
 
-	entry.log(InfoLevel, flattenArgs(args...), fileName, lineNo)
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
+}
+
+func borrowPCSlice() ([]uintptr, int) {
+	n := rand.Intn(len(pcSlicePool))
+	pcCache := pcSlicePool[n]
+	pcCache.lock.Lock()
+	return pcCache.pc, n
+}
+
+func putPCSlice(n int) {
+	 pcSlicePool[n].lock.Unlock()
+}
+
+func pcToFileLineNo(pc uintptr) (fileName string, lineNo int) {
+	cachedCallersMu.RLock()
+	info, ok := cachedCallers[pc]
+	cachedCallersMu.RUnlock()
+	if ok {
+		// Fast path: got a hit in the cache.
+		fileName, lineNo = info.file, info.line
+		return
+	}
+
+	// Slow path, look up the file/line number.  We reconstruct
+	// the pointer slice, just so we can return the above slice
+	// to the pool as quickly as possible (and avoid overlapping
+	// locks).
+	frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
+	fileName = path.Base(frame.File)
+	lineNo = frame.Line
+	cachedCallersMu.Lock()
+	if len(cachedCallers) > 2<<16 {
+		// If the cache is getting too big, start dropping entries.
+		dropped := 0
+		// Go's map iteration is random so deleting the first
+		// entries we see should do the trick.
+		for k := range cachedCallers {
+			delete(cachedCallers, k)
+			dropped++
+			if dropped > 128 {
+				break
+			}
+		}
+	}
+	cachedCallers[pc] = callerInfo{fileName, lineNo}
+	cachedCallersMu.Unlock()
+
+	return
 }
 
 var (
