@@ -344,11 +344,27 @@ func appendKVsAndNewLine(b *bytes.Buffer, data FieldsSlice) {
 // Warning: using Log at Panic or Fatal level will not respectively Panic nor Exit.
 // For this behaviour Entry.Panic or Entry.Fatal should be used instead.
 func (entry *Entry) Log(level Level, args ...interface{}) {
-	if entry.Logger.IsLevelEnabled(level) {
-		fileName, lineNo := getCaller()
-		msg := flattenArgs(args...)
-		entry.log(level, msg, fileName, lineNo)
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
 	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func flattenArgs(args ...interface{}) string {
@@ -367,15 +383,81 @@ func flattenArgs(args ...interface{}) string {
 }
 
 func (entry *Entry) Trace(args ...interface{}) {
-	entry.Log(TraceLevel, args...)
+	const level = TraceLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Debug(args ...interface{}) {
-	entry.Log(DebugLevel, args...)
+	const level = DebugLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Print(args ...interface{}) {
-	entry.Info(args...)
+	const level = InfoLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Info(args ...interface{}) {
@@ -503,24 +585,131 @@ func callerFileLine(skip int) (file string, line int) {
 }
 
 func (entry *Entry) Warn(args ...interface{}) {
-	entry.Log(WarnLevel, args...)
+	const level = WarnLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Warning(args ...interface{}) {
-	entry.Warn(args...)
+	const level = WarnLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Error(args ...interface{}) {
-	entry.Log(ErrorLevel, args...)
+	const level = ErrorLevel
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Fatal(args ...interface{}) {
-	entry.Log(FatalLevel, args...)
-	entry.Logger.Exit(1)
+	const level = FatalLevel
+	defer entry.Logger.Exit(1)
+
+	if !entry.Logger.IsLevelEnabled(level) {
+		return
+	}
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
 }
 
 func (entry *Entry) Panic(args ...interface{}) {
-	entry.Log(PanicLevel, args...)
+	const level = PanicLevel
+	
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		// Use a pool of slices to avoid leaking the slice to the heap.
+		// runtime.Callers() is not marked as "noescape".
+		pcSlice, pcSliceHandle := borrowPCSlice()
+		n := runtime.Callers(2, pcSlice)
+		pc := pcSlice[0] // Copy the PC out before we release the lock.
+		putPCSlice(pcSliceHandle)
+		if n == 1 {
+			fileName, lineNo = pcToFileLineNo(pc)
+		}
+	}
+
+	entry.log(level, flattenArgs(args...), fileName, lineNo)
+	panic(entry)
 }
 
 // Entry Printf family functions
