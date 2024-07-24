@@ -382,29 +382,86 @@ func (entry *Entry) Info(args ...interface{}) {
 	if !entry.Logger.IsLevelEnabled(InfoLevel) {
 		return
 	}
-	fileName, lineNo := callerFileLine(1)
+
+	// Look up the calling function.  Inlined because runtime.Callers() is
+	// faster if it doesn't have to walk so far up the stack.
+	var fileName string
+	var lineNo int
+	{
+		var n int
+		var pc uintptr
+		{
+			// Use a pool of slices to avoid leaking the slice to the heap.
+			// runtime.Callers() is not marked as "noescape".
+			pcCache := pcSlicePool[rand.Intn(len(pcSlicePool))]
+			pcCache.lock.Lock()
+			pcSlice := pcCache.pc
+			n = runtime.Callers(2, pcSlice)
+			pc = pcSlice[0] // Copy the PC out before we release the lock.
+			pcSlice[0] = 0
+			pcCache.lock.Unlock()
+		}
+
+		if n == 1 {
+			// To avoid another allocation, we cache the calculated file and
+			// line number in a map.
+			cachedCallersMu.RLock()
+			info, ok := cachedCallers[pc]
+			cachedCallersMu.RUnlock()
+			if ok {
+				// Fast path: got a hit in the cache.
+				fileName, lineNo = info.file, info.line
+			} else {
+				// Slow path, look up the file/line number.  We reconstruct
+				// the pointer slice, just so we can return the above slice
+				// to the pool as quickly as possible (and avoid overlapping
+				// locks).
+				frame, _ := runtime.CallersFrames([]uintptr{pc}).Next()
+				fileName = path.Base(frame.File)
+				lineNo = frame.Line
+				cachedCallersMu.Lock()
+				if len(cachedCallers) > 2<<16 {
+					// If the cache is getting too big, start dropping entries.
+					dropped := 0
+					// Go's map iteration is random so deleting the first
+					// entries we see should do the trick.
+					for k := range cachedCallers {
+						delete(cachedCallers, k)
+						dropped++
+						if dropped > 128 {
+							break
+						}
+					}
+				}
+				cachedCallers[pc] = callerInfo{fileName, lineNo}
+				cachedCallersMu.Unlock()
+			}
+		}
+	}
+
 	entry.log(InfoLevel, flattenArgs(args...), fileName, lineNo)
 }
 
 var (
-	cachedCallersMu sync.Mutex
-	cachedCallers = map[uintptr]callerInfo{}
+	cachedCallersMu sync.RWMutex
+	cachedCallers   = map[uintptr]callerInfo{}
 )
+
 type callerInfo struct {
 	file string
 	line int
 }
 
-var callerPCs [32]*struct{
+var pcSlicePool [32]*struct {
 	lock sync.Mutex
-	pc []uintptr
+	pc   []uintptr
 }
 
 func init() {
-	for i := range callerPCs {
-		callerPCs[i] = &struct{
+	for i := range pcSlicePool {
+		pcSlicePool[i] = &struct {
 			lock sync.Mutex
-			pc []uintptr
+			pc   []uintptr
 		}{
 			pc: make([]uintptr, 1),
 		}
@@ -412,7 +469,7 @@ func init() {
 }
 
 func callerFileLine(skip int) (file string, line int) {
-	pcCache := callerPCs[rand.Intn(len(callerPCs))]
+	pcCache := pcSlicePool[rand.Intn(len(pcSlicePool))]
 	pcCache.lock.Lock()
 	defer pcCache.lock.Unlock()
 
@@ -424,8 +481,8 @@ func callerFileLine(skip int) (file string, line int) {
 
 	cachedCallersMu.Lock()
 	defer cachedCallersMu.Unlock()
-	info, ok := cachedCallers[pc[0]];
-	if  ok {
+	info, ok := cachedCallers[pc[0]]
+	if ok {
 		return info.file, info.line
 	}
 
